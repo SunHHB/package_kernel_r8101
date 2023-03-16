@@ -1459,8 +1459,8 @@ static void mdio_real_direct_write_phy_ocp(struct rtl8101_private *tp,
         data32 |= OCPR_Write | value;
 
         RTL_W32(tp, PHYOCP, data32);
-        for (i = 0; i < 100; i++) {
-                udelay(1);
+        for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                udelay(R8101_CHANNEL_WAIT_TIME);
 
                 if (!(RTL_R32(tp, PHYOCP) & OCPR_Flag))
                         break;
@@ -1523,12 +1523,12 @@ static void mdio_real_write(struct rtl8101_private *tp,
                         (RegAddr & PHYAR_Reg_Mask) << PHYAR_Reg_shift |
                         (value & PHYAR_Data_Mask));
 
-                for (i = 0; i < 10; i++) {
-                        udelay(100);
+                for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                        udelay(R8101_CHANNEL_WAIT_TIME);
 
                         /* Check if the RTL8101 has completed writing to the specified MII register */
                         if (!(RTL_R32(tp, PHYAR) & PHYAR_Flag)) {
-                                udelay(20);
+                                udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
                                 break;
                         }
                 }
@@ -1604,8 +1604,8 @@ static u32 mdio_real_direct_read_phy_ocp(struct rtl8101_private *tp,
         data32 <<= OCPR_Addr_Reg_shift;
 
         RTL_W32(tp, PHYOCP, data32);
-        for (i = 0; i < 100; i++) {
-                udelay(1);
+        for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                udelay(R8101_CHANNEL_WAIT_TIME);
 
                 if (RTL_R32(tp, PHYOCP) & OCPR_Flag)
                         break;
@@ -1659,13 +1659,13 @@ u32 mdio_real_read(struct rtl8101_private *tp,
                 RTL_W32(tp, PHYAR,
                         PHYAR_Read | (RegAddr & PHYAR_Reg_Mask) << PHYAR_Reg_shift);
 
-                for (i = 0; i < 10; i++) {
-                        udelay(100);
+                for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                        udelay(R8101_CHANNEL_WAIT_TIME);
 
                         /* Check if the RTL8101 has completed retrieving data from the specified MII register */
                         if (RTL_R32(tp, PHYAR) & PHYAR_Flag) {
                                 value = RTL_R32(tp, PHYAR) & PHYAR_Data_Mask;
-                                udelay(20);
+                                udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
                                 break;
                         }
                 }
@@ -1812,15 +1812,15 @@ rtl8101_phyio_write(struct rtl8101_private *tp,
                 (RegAddr & PHYIO_Reg_Mask) << PHYIO_Reg_shift |
                 (value & PHYIO_Data_Mask));
 
-        for (i = 0; i < 10; i++) {
-                udelay(100);
+        for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                udelay(R8101_CHANNEL_WAIT_TIME);
 
                 /* Check if the RTL8101 has completed writing to the specified MII register */
                 if (!(RTL_R32(tp, PHYIO) & PHYIO_Flag))
                         break;
         }
 
-        udelay(100);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 }
 
 #if 0
@@ -1833,8 +1833,8 @@ rtl8101_phyio_read(struct rtl8101_private *tp,
         RTL_W32(tp, PHYIO,
                 PHYIO_Read | (RegAddr & PHYIO_Reg_Mask) << PHYIO_Reg_shift);
 
-        for (i = 0; i < 10; i++) {
-                udelay(100);
+        for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                udelay(R8101_CHANNEL_WAIT_TIME);
 
                 /* Check if the RTL8101 has completed retrieving data from the specified MII register */
                 if (RTL_R32(tp, PHYIO) & PHYIO_Flag) {
@@ -1843,42 +1843,62 @@ rtl8101_phyio_read(struct rtl8101_private *tp,
                 }
         }
 
-        udelay(100);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 
         return value;
 }
 #endif
 
-void rtl8101_ephy_write(struct rtl8101_private *tp, u32 RegAddr, u32 value)
+static u8 rtl8101_check_ephy_addr(struct rtl8101_private *tp, int addr)
+{
+        if ( tp->mcfg != CFG_METHOD_20) goto exit;
+
+        if (addr & (BIT_6 | BIT_5))
+                rtl8101_clear_and_set_mcu_ocp_bit(tp, 0xDE28,
+                                                  (BIT_1 | BIT_0),
+                                                  (addr >> 5) & (BIT_1 | BIT_0));
+
+        addr &= 0x1F;
+
+exit:
+        return addr;
+}
+
+static void _rtl8101_ephy_write(struct rtl8101_private *tp, u32 addr, u32 value)
 {
         int i;
 
         RTL_W32(tp, EPHYAR,
                 EPHYAR_Write |
-                (RegAddr & EPHYAR_Reg_Mask) << EPHYAR_Reg_shift |
+                (addr & EPHYAR_Reg_Mask) << EPHYAR_Reg_shift |
                 (value & EPHYAR_Data_Mask));
 
-        for (i = 0; i < 10; i++) {
-                udelay(100);
+        for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                udelay(R8101_CHANNEL_WAIT_TIME);
 
                 /* Check if the RTL8101 has completed EPHY write */
                 if (!(RTL_R32(tp, EPHYAR) & EPHYAR_Flag))
                         break;
         }
 
-        udelay(20);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 }
 
-u16 rtl8101_ephy_read(struct rtl8101_private *tp, u32 RegAddr)
+void rtl8101_ephy_write(struct rtl8101_private *tp, u32 addr, u32 value)
+{
+        _rtl8101_ephy_write(tp, rtl8101_check_ephy_addr(tp, addr), value);
+}
+
+static u16 _rtl8101_ephy_read(struct rtl8101_private *tp, u32 addr)
 {
         int i;
         u16 value = 0xffff;
 
         RTL_W32(tp, EPHYAR,
-                EPHYAR_Read | (RegAddr & EPHYAR_Reg_Mask) << EPHYAR_Reg_shift);
+                EPHYAR_Read | (addr & EPHYAR_Reg_Mask) << EPHYAR_Reg_shift);
 
-        for (i = 0; i < 10; i++) {
-                udelay(100);
+        for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                udelay(R8101_CHANNEL_WAIT_TIME);
 
                 /* Check if the RTL8101 has completed EPHY read */
                 if (RTL_R32(tp, EPHYAR) & EPHYAR_Flag) {
@@ -1887,9 +1907,14 @@ u16 rtl8101_ephy_read(struct rtl8101_private *tp, u32 RegAddr)
                 }
         }
 
-        udelay(20);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 
         return value;
+}
+
+u16 rtl8101_ephy_read(struct rtl8101_private *tp, u32 addr)
+{
+        return _rtl8101_ephy_read(tp, rtl8101_check_ephy_addr(tp, addr));
 }
 
 static void ClearAndSetPCIePhyBit(struct rtl8101_private *tp, u8 addr, u16 clearmask, u16 setmask)
@@ -1943,8 +1968,8 @@ rtl8101_csi_other_fun_read(struct rtl8101_private *tp,
 
         RTL_W32(tp, CSIAR, cmd);
 
-        for (i = 0; i < 10; i++) {
-                udelay(100);
+        for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                udelay(R8101_CHANNEL_WAIT_TIME);
 
                 /* Check if the RTL8101 has completed CSI read */
                 if (RTL_R32(tp, CSIAR) & CSIAR_Flag) {
@@ -1953,7 +1978,7 @@ rtl8101_csi_other_fun_read(struct rtl8101_private *tp,
                 }
         }
 
-        udelay(20);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 
         return value;
 }
@@ -1981,15 +2006,15 @@ rtl8101_csi_other_fun_write(struct rtl8101_private *tp,
 
         RTL_W32(tp, CSIAR, cmd);
 
-        for (i = 0; i < 10; i++) {
-                udelay(100);
+        for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                udelay(R8101_CHANNEL_WAIT_TIME);
 
                 /* Check if the RTL8101 has completed CSI write */
                 if (!(RTL_R32(tp, CSIAR) & CSIAR_Flag))
                         break;
         }
 
-        udelay(20);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 }
 
 static u32
@@ -2035,7 +2060,7 @@ rtl8101_csi_fun0_read_byte(struct rtl8101_private *tp,
 
                 RegAlignAddr = addr & ~(0x3);
                 ShiftByte = addr & (0x3);
-                TmpUlong = rtl8101_csi_other_fun_read(tp, 0, addr);
+                TmpUlong = rtl8101_csi_other_fun_read(tp, 0, RegAlignAddr);
                 TmpUlong >>= (8*ShiftByte);
                 RetVal = (u8)TmpUlong;
         } else {
@@ -2044,7 +2069,7 @@ rtl8101_csi_fun0_read_byte(struct rtl8101_private *tp,
                 pci_read_config_byte(pdev, addr, &RetVal);
         }
 
-        udelay(20);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 
         return RetVal;
 }
@@ -2071,7 +2096,7 @@ rtl8101_csi_fun0_write_byte(struct rtl8101_private *tp,
                 pci_write_config_byte(pdev, addr, value);
         }
 
-        udelay(20);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 }
 
 u32 rtl8101_eri_read(struct rtl8101_private *tp, int addr, int len, int type)
@@ -2092,8 +2117,8 @@ u32 rtl8101_eri_read(struct rtl8101_private *tp, int addr, int len, int type)
                         ERIAR_ByteEn << ERIAR_ByteEn_shift |
                         addr);
 
-                for (i = 0; i < 10; i++) {
-                        udelay(100);
+                for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                        udelay(R8101_CHANNEL_WAIT_TIME);
 
                         /* Check if the RTL8101 has completed ERI read */
                         if (RTL_R32(tp, ERIAR) & ERIAR_Flag)
@@ -2117,7 +2142,7 @@ u32 rtl8101_eri_read(struct rtl8101_private *tp, int addr, int len, int type)
                 }
         }
 
-        udelay(20);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 
         return value2;
 }
@@ -2149,8 +2174,8 @@ int rtl8101_eri_write(struct rtl8101_private *tp, int addr, int len, u32 value, 
                         ERIAR_ByteEn << ERIAR_ByteEn_shift |
                         addr);
 
-                for (i = 0; i < 10; i++) {
-                        udelay(100);
+                for (i = 0; i < R8101_CHANNEL_WAIT_COUNT; i++) {
+                        udelay(R8101_CHANNEL_WAIT_TIME);
 
                         /* Check if the RTL8101 has completed ERI write */
                         if (!(RTL_R32(tp, ERIAR) & ERIAR_Flag))
@@ -2166,7 +2191,7 @@ int rtl8101_eri_write(struct rtl8101_private *tp, int addr, int len, u32 value, 
                 }
         }
 
-        udelay(20);
+        udelay(R8101_CHANNEL_EXIT_DELAY_TIME);
 
         return 0;
 }
@@ -3211,10 +3236,7 @@ rtl8101_enable_pci_offset_180(struct rtl8101_private *tp)
 static void
 rtl8101_init_pci_offset_180(struct rtl8101_private *tp)
 {
-        if (tp->org_pci_offset_180 & (BIT_0|BIT_1))
-                rtl8101_enable_pci_offset_180(tp);
-        else
-                rtl8101_disable_pci_offset_180(tp);
+        rtl8101_enable_pci_offset_180(tp);
 }
 
 static void
@@ -3543,37 +3565,33 @@ rtl8101_set_wol_link_speed(struct net_device *dev)
         auto_nego &= ~(ADVERTISE_10HALF | ADVERTISE_10FULL
                        | ADVERTISE_100HALF | ADVERTISE_100FULL);
 
-        aner = anlpar = 0;
+        aner = tp->phy_reg_aner;
+        anlpar = tp->phy_reg_anlpar;
         if (tp->link_ok(dev)) {
                 aner = rtl8101_mdio_read(tp, MII_EXPANSION);
                 anlpar = rtl8101_mdio_read(tp, MII_LPA);
-        } else {
-                if (netif_running(dev)) {
-                        aner = tp->phy_reg_aner;
-                        anlpar = tp->phy_reg_anlpar;
-                }
         }
 
+        adv = tp->advertising;
         if ((aner | anlpar) == 0) {
                 int auto_nego_tmp = 0;
-                adv = tp->advertising;
-                if ((adv & ADVERTISED_10baseT_Half) && (anlpar & LPA_10HALF))
+                if (adv & ADVERTISED_10baseT_Half)
                         auto_nego_tmp |= ADVERTISE_10HALF;
-                if ((adv & ADVERTISED_10baseT_Full) && (anlpar & LPA_10FULL))
+                if (adv & ADVERTISED_10baseT_Full)
                         auto_nego_tmp |= ADVERTISE_10FULL;
-                if ((adv & ADVERTISED_100baseT_Half) && (anlpar & LPA_100HALF))
+                if (adv & ADVERTISED_100baseT_Half)
                         auto_nego_tmp |= ADVERTISE_100HALF;
-                if ((adv & ADVERTISED_100baseT_Full) && (anlpar & LPA_100FULL))
+                if (adv & ADVERTISED_100baseT_Full)
                         auto_nego_tmp |= ADVERTISE_100FULL;
 
-                if (auto_nego_tmp == 0)	goto exit;
+                if (auto_nego_tmp == 0)
+                        goto exit;
 
                 auto_nego |= auto_nego_tmp;
                 goto skip_check_lpa;
         }
         if (!(aner & EXPANSION_NWAY)) goto exit;
 
-        adv = tp->advertising;
         if ((adv & ADVERTISED_10baseT_Half) && (anlpar & LPA_10HALF))
                 auto_nego |= ADVERTISE_10HALF;
         else if ((adv & ADVERTISED_10baseT_Full) && (anlpar & LPA_10FULL))
@@ -4471,7 +4489,7 @@ rtl8101_wait_for_quiescence(struct net_device *dev)
 {
         struct rtl8101_private *tp = netdev_priv(dev);
 
-        synchronize_irq(dev->irq);
+        synchronize_irq(tp->irq);
 
         /* Wait for any pending NAPI task to complete */
 #ifdef CONFIG_R8101_NAPI
@@ -5567,7 +5585,7 @@ rtl8101_set_mac_mcu_8107e_2(struct net_device *dev)
 {
         struct rtl8101_private *tp = netdev_priv(dev);
         u16 i;
-        static const u16 mcu_patch_code_8107e_1[] = {
+        static const u16 mcu_patch_code_8107e_2[] = {
                 0xE008, 0xE00F, 0xE011, 0xE047, 0xE049, 0xE073, 0xE075, 0xE07A, 0xC707,
                 0x1D00, 0x8DE2, 0x48C1, 0xC502, 0xBD00, 0x00E4, 0xE0C0, 0xC502, 0xBD00,
                 0x0216, 0xC634, 0x75C0, 0x49D3, 0xF027, 0xC631, 0x75C0, 0x49D3, 0xF123,
@@ -5587,8 +5605,8 @@ rtl8101_set_mac_mcu_8107e_2(struct net_device *dev)
 
         rtl8101_hw_disable_mac_mcu_bps(dev);
 
-        for (i = 0; i < ARRAY_SIZE(mcu_patch_code_8107e_1); i++) {
-                rtl8101_mac_ocp_write(tp, 0xF800 + i * 2, mcu_patch_code_8107e_1[i]);
+        for (i = 0; i < ARRAY_SIZE(mcu_patch_code_8107e_2); i++) {
+                rtl8101_mac_ocp_write(tp, 0xF800 + i * 2, mcu_patch_code_8107e_2[i]);
         }
 
         rtl8101_mac_ocp_write(tp, 0xFC26, 0x8000);
@@ -5607,7 +5625,81 @@ rtl8101_set_mac_mcu_8107e_2(struct net_device *dev)
 static void
 rtl8101_set_mac_mcu_8107e_3(struct net_device *dev)
 {
+        struct rtl8101_private *tp = netdev_priv(dev);
+        u16 i;
+        static const u16 mcu_patch_code_8107e_3[] = {
+                0xE008, 0xE00A, 0xE00C, 0xE00E, 0xE010, 0xE039, 0xE03B, 0xE064, 0xC602,
+                0xBE00, 0x0000, 0xC602, 0xBE00, 0x0000, 0xC602, 0xBE00, 0x0000, 0xC602,
+                0xBE00, 0x0000, 0xC727, 0x76E2, 0x49EE, 0xF1FD, 0x1E00, 0x8EE0, 0x1E1C,
+                0x8EE2, 0x76E2, 0x49EE, 0xF1FE, 0xC61D, 0x8EE0, 0x1E1D, 0x486F, 0x8EE2,
+                0x76E2, 0x49EE, 0xF12C, 0xC716, 0x76E0, 0x48E8, 0x48E9, 0x48EA, 0x48EB,
+                0x48EC, 0x9EE0, 0xC709, 0xC609, 0x9EF4, 0xC608, 0x9EF6, 0xB007, 0xC602,
+                0xBE00, 0x0ACC, 0xE000, 0x03BF, 0x07FF, 0xDE24, 0x3200, 0xE096, 0xC602,
+                0xBE00, 0x0000, 0x8EE6, 0xC726, 0x76E2, 0x49EE, 0xF1FD, 0x1E00, 0x8EE0,
+                0x1E1C, 0x8EE2, 0x76E2, 0x49EE, 0xF1FE, 0xC61C, 0x8EE0, 0x1E1D, 0x486F,
+                0x8EE2, 0x76E2, 0x49EE, 0xF1FE, 0xC715, 0x76E0, 0x48E8, 0x48E9, 0x48EA,
+                0x48EB, 0x48EC, 0x9EE0, 0xC708, 0xC608, 0x9EF4, 0xC607, 0x9EF6, 0xC602,
+                0xBE00, 0x0ABE, 0xE000, 0x03BF, 0x07FF, 0xDE24, 0x3200, 0xE096, 0xC602,
+                0xBE00, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+                0x0000, 0x0000, 0x0000, 0x0000, 0x6838, 0x0A16, 0x0901, 0x101C
+        };
+
         rtl8101_hw_disable_mac_mcu_bps(dev);
+
+        for (i = 0; i < ARRAY_SIZE(mcu_patch_code_8107e_3); i++) {
+                rtl8101_mac_ocp_write(tp, 0xF800 + i * 2, mcu_patch_code_8107e_3[i]);
+        }
+
+        rtl8101_mac_ocp_write(tp, 0xFC26, 0x8000);
+
+        rtl8101_mac_ocp_write(tp, 0xFC30, 0x0ACA);
+
+        rtl8101_clear_mcu_ocp_bit(tp, 0xD438, BIT_3);
+
+        rtl8101_mac_ocp_write(tp, 0xFC38, 0x0010);
 }
 
 static void
@@ -5881,9 +5973,13 @@ rtl8101_hw_ephy_config(struct net_device *dev)
                 rtl8101_ephy_write(tp, 0x04, 0x854A);
                 rtl8101_ephy_write(tp, 0x01, 0x068B);
         } else if (tp->mcfg == CFG_METHOD_20) {
+                rtl8101_clear_mcu_ocp_bit(tp, 0xDE38, BIT_2);
+
+                ClearPCIePhyBit(tp, 0x24, BIT_9);
+
                 rtl8101_clear_mcu_ocp_bit(tp, 0xDE28, (BIT_1 | BIT_0));
 
-                rtl8101_set_mcu_ocp_bit(tp, 0xDE38, (BIT_2));
+                rtl8101_set_mcu_ocp_bit(tp, 0xDE38, BIT_2);
         }
 }
 
@@ -10006,15 +10102,14 @@ static void
 rtl8101_netpoll(struct net_device *dev)
 {
         struct rtl8101_private *tp = netdev_priv(dev);
-        struct pci_dev *pdev = tp->pci_dev;
 
-        disable_irq(pdev->irq);
+        disable_irq(tp->irq);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,19)
-        rtl8101_interrupt(pdev->irq, dev, NULL);
+        rtl8101_interrupt(tp->irq, dev, NULL);
 #else
-        rtl8101_interrupt(pdev->irq, dev);
+        rtl8101_interrupt(tp->irq, dev);
 #endif
-        enable_irq(pdev->irq);
+        enable_irq(tp->irq);
 }
 #endif
 
@@ -10130,7 +10225,8 @@ rtl8101_init_software_variable(struct net_device *dev)
 
         switch (tp->mcfg) {
         case CFG_METHOD_17:
-                if ((tp->features & RTL_FEATURE_MSI) && (tp->org_pci_offset_80 & BIT_1))
+                if ((tp->features & (RTL_FEATURE_MSI | RTL_FEATURE_MSIX)) &&
+                    (tp->org_pci_offset_80 & BIT_1))
                         tp->use_timer_interrrupt = FALSE;
                 else
                         tp->use_timer_interrrupt = TRUE;
@@ -11298,11 +11394,11 @@ rtl8101_init_board(struct pci_dev *pdev,
 
         if ((sizeof(dma_addr_t) > 4) &&
             use_dac &&
-            !pci_set_dma_mask(pdev, DMA_BIT_MASK(64)) &&
-            !pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64))) {
+            !dma_set_mask(&pdev->dev, DMA_BIT_MASK(64)) &&
+            !dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64))) {
                 dev->features |= NETIF_F_HIGHDMA;
         } else {
-                rc = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+                rc = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
                 if (rc < 0) {
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,0)
                         if (netif_msg_probe(tp))
@@ -11585,6 +11681,21 @@ rtl8101_link_timer(struct timer_list *t)
         mod_timer(timer, jiffies + RTL8101_LINK_TIMEOUT);
 }
 
+static int rtl8101_enable_msix(struct rtl8101_private *tp)
+{
+        int nvecs = 0;
+        struct msix_entry msix_ent[1] = {0};
+
+        nvecs = pci_enable_msix_range(tp->pci_dev, msix_ent,
+                                      1, 1);
+        if (nvecs < 0)
+                goto out;
+
+        tp->irq = msix_ent[0].vector;
+out:
+        return nvecs;
+}
+
 static unsigned rtl8101_try_msi(struct pci_dev *pdev, struct rtl8101_private *tp)
 {
         unsigned msi = 0;
@@ -11603,19 +11714,35 @@ static unsigned rtl8101_try_msi(struct pci_dev *pdev, struct rtl8101_private *tp
                 dev_info(&pdev->dev, "Default use INTx.\n");
                 break;
         default:
-                if (pci_enable_msi(pdev))
-                        dev_info(&pdev->dev, "no MSI. Back to INTx.\n");
-                else
+                if (rtl8101_enable_msix(tp) > 0)
+                        msi |= RTL_FEATURE_MSIX;
+                else if (!pci_enable_msi(pdev))
                         msi |= RTL_FEATURE_MSI;
+                else
+                        dev_info(&pdev->dev, "no MSI. Back to INTx.\n");
                 break;
         }
 #endif
+
+        if (msi & RTL_FEATURE_MSIX)
+                goto out;
+
+        tp->irq = pdev->irq;
+
+out:
 
         return msi;
 }
 
 static void rtl8101_disable_msi(struct pci_dev *pdev, struct rtl8101_private *tp)
 {
+        if (tp->features & RTL_FEATURE_MSIX) {
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,13)
+                pci_disable_msix(pdev);
+#endif
+                tp->features &= ~RTL_FEATURE_MSIX;
+        }
+
         if (tp->features & RTL_FEATURE_MSI) {
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,13)
                 pci_disable_msi(pdev);
@@ -11714,7 +11841,7 @@ rtl8101_init_one(struct pci_dev *pdev,
 #endif
 
         dev->watchdog_timeo = RTL8101_TX_TIMEOUT;
-        dev->irq = pdev->irq;
+        dev->irq = tp->irq;
         dev->base_addr = (unsigned long) ioaddr;
 
 #ifdef CONFIG_R8101_NAPI
@@ -11749,6 +11876,10 @@ rtl8101_init_one(struct pci_dev *pdev,
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22)
                 if ((tp->mcfg == CFG_METHOD_1) || (tp->mcfg == CFG_METHOD_2) || (tp->mcfg == CFG_METHOD_3)) {
                         dev->hw_features &= ~NETIF_F_IPV6_CSUM;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,19,0)
+                        netif_set_tso_max_size(dev, LSO_64K);
+                        netif_set_tso_max_segs(dev, NIC_MAX_PHYS_BUF_COUNT_LSO2);
+#else //LINUX_VERSION_CODE >= KERNEL_VERSION(5,19,0)
                         netif_set_gso_max_size(dev, LSO_32K);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,18,0)
                         dev->gso_max_segs = NIC_MAX_PHYS_BUF_COUNT_LSO_64K;
@@ -11756,9 +11887,14 @@ rtl8101_init_one(struct pci_dev *pdev,
                         dev->gso_min_segs = NIC_MIN_PHYS_BUF_COUNT;
 #endif //LINUX_VERSION_CODE < KERNEL_VERSION(4,7,0)
 #endif //LINUX_VERSION_CODE >= KERNEL_VERSION(3,18,0)
+#endif //LINUX_VERSION_CODE >= KERNEL_VERSION(5,19,0)
                 } else {
                         dev->hw_features |= NETIF_F_IPV6_CSUM | NETIF_F_TSO6;
                         dev->features |=  NETIF_F_IPV6_CSUM;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,19,0)
+                        netif_set_tso_max_size(dev, LSO_64K);
+                        netif_set_tso_max_segs(dev, NIC_MAX_PHYS_BUF_COUNT_LSO2);
+#else //LINUX_VERSION_CODE >= KERNEL_VERSION(5,19,0)
                         netif_set_gso_max_size(dev, LSO_64K);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,18,0)
                         dev->gso_max_segs = NIC_MAX_PHYS_BUF_COUNT_LSO2;
@@ -11766,6 +11902,7 @@ rtl8101_init_one(struct pci_dev *pdev,
                         dev->gso_min_segs = NIC_MIN_PHYS_BUF_COUNT;
 #endif //LINUX_VERSION_CODE < KERNEL_VERSION(4,7,0)
 #endif //LINUX_VERSION_CODE >= KERNEL_VERSION(3,18,0)
+#endif //LINUX_VERSION_CODE >= KERNEL_VERSION(5,19,0)
                 }
 #endif //LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,22)
 #endif //LINUX_VERSION_CODE < KERNEL_VERSION(3,0,0)
@@ -11794,7 +11931,10 @@ rtl8101_init_one(struct pci_dev *pdev,
 
         rtl8101_get_mac_address(dev);
 
-        tp->tally_vaddr = pci_alloc_consistent(pdev, sizeof(*tp->tally_vaddr), &tp->tally_paddr);
+        tp->tally_vaddr = dma_alloc_coherent(&pdev->dev,
+                                             sizeof(*tp->tally_vaddr),
+                                             &tp->tally_paddr,
+                                             GFP_KERNEL);
         if (!tp->tally_vaddr) {
                 rc = -ENOMEM;
                 goto err_out;
@@ -11828,9 +11968,10 @@ out:
 
 err_out:
         if (tp->tally_vaddr != NULL) {
-                pci_free_consistent(pdev, sizeof(*tp->tally_vaddr), tp->tally_vaddr,
-                                    tp->tally_paddr);
-
+                dma_free_coherent(&pdev->dev,
+                                  sizeof(*tp->tally_vaddr),
+                                  tp->tally_vaddr,
+                                  tp->tally_paddr);
                 tp->tally_vaddr = NULL;
         }
 #ifdef  CONFIG_R8101_NAPI
@@ -11862,7 +12003,10 @@ rtl8101_remove_one(struct pci_dev *pdev)
         rtl8101_proc_remove(dev);
 #endif
         if (tp->tally_vaddr != NULL) {
-                pci_free_consistent(pdev, sizeof(*tp->tally_vaddr), tp->tally_vaddr, tp->tally_paddr);
+                dma_free_coherent(&pdev->dev,
+                                  sizeof(*tp->tally_vaddr),
+                                  tp->tally_vaddr,
+                                  tp->tally_paddr);
                 tp->tally_vaddr = NULL;
         }
 
@@ -11908,17 +12052,19 @@ static int rtl8101_open(struct net_device *dev)
 
         /*
          * Rx and Tx descriptors needs 256 bytes alignment.
-         * pci_alloc_consistent provides more.
+         * dma_alloc_coherent provides more.
          */
-        tp->TxDescArray = pci_alloc_consistent(pdev,
-                                               (tp->num_tx_desc * sizeof(struct TxDesc)),
-                                               &tp->TxPhyAddr);
+        tp->TxDescAllocSize = (tp->num_tx_desc + 1) * sizeof(struct TxDesc);
+        tp->TxDescArray = dma_alloc_coherent(&pdev->dev,
+                                             tp->TxDescAllocSize,
+                                             &tp->TxPhyAddr, GFP_KERNEL);
         if (!tp->TxDescArray)
                 goto out;
 
-        tp->RxDescArray = pci_alloc_consistent(pdev,
-                                               (tp->num_rx_desc * sizeof(struct RxDesc)),
-                                               &tp->RxPhyAddr);
+        tp->RxDescAllocSize = (tp->num_rx_desc + 1) * sizeof(struct RxDesc);
+        tp->RxDescArray = dma_alloc_coherent(&pdev->dev,
+                                             tp->RxDescAllocSize,
+                                             &tp->RxPhyAddr, GFP_KERNEL);
         if (!tp->RxDescArray)
                 goto err_free_tx;
 
@@ -11926,7 +12072,8 @@ static int rtl8101_open(struct net_device *dev)
         if (retval < 0)
                 goto err_free_rx;
 
-        retval = request_irq(dev->irq, rtl8101_interrupt, (tp->features & RTL_FEATURE_MSI) ? 0 : SA_SHIRQ, dev->name, dev);
+        retval = request_irq(tp->irq, rtl8101_interrupt, (tp->features &
+                             (RTL_FEATURE_MSI | RTL_FEATURE_MSIX)) ? 0 : SA_SHIRQ, dev->name, dev);
 
         if (retval < 0)
                 goto err_free_rx;
@@ -11939,7 +12086,7 @@ static int rtl8101_open(struct net_device *dev)
                        dev->base_addr,
                        dev->dev_addr[0], dev->dev_addr[1],
                        dev->dev_addr[2], dev->dev_addr[3],
-                       dev->dev_addr[4], dev->dev_addr[5], dev->irq);
+                       dev->dev_addr[4], dev->dev_addr[5], tp->irq);
         }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)
@@ -11987,16 +12134,16 @@ out:
         return retval;
 
 err_free_rx:
-        pci_free_consistent(pdev,
-                            (tp->num_rx_desc * sizeof(struct RxDesc)),
-                            tp->RxDescArray,
-                            tp->RxPhyAddr);
+        dma_free_coherent(&pdev->dev,
+                          tp->RxDescAllocSize,
+                          tp->RxDescArray,
+                          tp->RxPhyAddr);
         tp->RxDescArray = NULL;
 err_free_tx:
-        pci_free_consistent(pdev,
-                            (tp->num_tx_desc * sizeof(struct TxDesc)),
-                            tp->TxDescArray,
-                            tp->TxPhyAddr);
+        dma_free_coherent(&pdev->dev,
+                          tp->TxDescAllocSize,
+                          tp->TxDescArray,
+                          tp->TxPhyAddr);
         tp->TxDescArray = NULL;
         goto out;
 }
@@ -12611,8 +12758,11 @@ rtl8101_hw_config(struct net_device *dev)
         case CFG_METHOD_18:
         case CFG_METHOD_19:
         case CFG_METHOD_20:
-                if (aspm)
-                        rtl8101_init_pci_offset_99(tp);
+                rtl8101_disable_pci_offset_99(tp);
+                if (aspm) {
+                        if (tp->org_pci_offset_99 & (BIT_2 | BIT_5 | BIT_6))
+                                rtl8101_init_pci_offset_99(tp);
+                }
                 break;
         }
 
@@ -12621,8 +12771,11 @@ rtl8101_hw_config(struct net_device *dev)
         case CFG_METHOD_18:
         case CFG_METHOD_19:
         case CFG_METHOD_20:
-                if (aspm)
-                        rtl8101_init_pci_offset_180(tp);
+                rtl8101_disable_pci_offset_180(tp);
+                if (aspm) {
+                        if (tp->org_pci_offset_180 & (BIT_0|BIT_1))
+                                rtl8101_init_pci_offset_180(tp);
+                }
                 break;
         }
 
@@ -12878,7 +13031,7 @@ rtl8101_tx_desc_init(struct rtl8101_private *tp)
 {
         int i = 0;
 
-        memset(tp->TxDescArray, 0x0, tp->num_tx_desc * sizeof(struct TxDesc));
+        memset(tp->TxDescArray, 0x0, tp->TxDescAllocSize);
 
         for (i = 0; i < tp->num_tx_desc; i++) {
                 if (i == (tp->num_tx_desc - 1))
@@ -12889,7 +13042,7 @@ rtl8101_tx_desc_init(struct rtl8101_private *tp)
 static void
 rtl8101_rx_desc_init(struct rtl8101_private *tp)
 {
-        memset(tp->RxDescArray, 0x0, tp->num_rx_desc * sizeof(struct RxDesc));
+        memset(tp->RxDescArray, 0x0, tp->RxDescAllocSize);
 }
 
 static int
@@ -13229,11 +13382,10 @@ rtl8101_tx_csum(struct sk_buff *skb,
                         break;
                 case __constant_htons(ETH_P_IPV6):
                         if (dev->features & NETIF_F_IPV6_CSUM) {
-                                u32 transport_offset = (u32)skb_transport_offset(skb);
-                                if (transport_offset > 0 && transport_offset <= TCPHO_MAX) {
+                                if (skb_transport_offset(skb) > 0 && skb_transport_offset(skb) <= TCPHO_MAX) {
                                         ip_protocol = ipv6_hdr(skb)->nexthdr;
                                         csum_cmd = tp->tx_ipv6_csum_cmd;
-                                        csum_cmd |= transport_offset << TCPHO_SHIFT;
+                                        csum_cmd |= skb_transport_offset(skb) << TCPHO_SHIFT;
                                 }
                         }
                         break;
@@ -13406,12 +13558,11 @@ rtl8101_start_xmit(struct sk_buff *skb,
                                 opts[0] |= LargeSend | (min(mss, MSS_MAX) << 16);
                                 large_send = 1;
                         } else {
-                                u32 transport_offset = (u32)skb_transport_offset(skb);
                                 switch (get_protocol(skb)) {
                                 case __constant_htons(ETH_P_IP):
-                                        if (transport_offset <= GTTCPHO_MAX) {
+                                        if (skb_transport_offset(skb) <= GTTCPHO_MAX) {
                                                 opts[0] |= GiantSendv4;
-                                                opts[0] |= transport_offset << GTTCPHO_SHIFT;
+                                                opts[0] |= skb_transport_offset(skb) << GTTCPHO_SHIFT;
                                                 opts[1] |= min(mss, MSS_MAX) << 18;
                                                 large_send = 1;
                                         }
@@ -13424,9 +13575,9 @@ rtl8101_start_xmit(struct sk_buff *skb,
                                                 goto out;
                                         }
 #endif
-                                        if (transport_offset <= GTTCPHO_MAX) {
+                                        if (skb_transport_offset(skb) <= GTTCPHO_MAX) {
                                                 opts[0] |= GiantSendv6;
-                                                opts[0] |= transport_offset << GTTCPHO_SHIFT;
+                                                opts[0] |= skb_transport_offset(skb) << GTTCPHO_SHIFT;
                                                 opts[1] |= min(mss, MSS_MAX) << 18;
                                                 large_send = 1;
                                         }
@@ -13682,10 +13833,12 @@ rtl8101_rx_interrupt(struct net_device *dev,
         rx_left = rtl8101_rx_quota(rx_left, (u32) rx_quota);
 
         for (; rx_left > 0; rx_left--) {
-                rmb();
                 status = le32_to_cpu(desc->opts1);
                 if (status & DescOwn)
                         break;
+
+                rmb();
+
                 if (unlikely(status & RxRES)) {
                         if (netif_msg_rx_err(tp)) {
                                 printk(KERN_INFO
@@ -13706,17 +13859,17 @@ rtl8101_rx_interrupt(struct net_device *dev,
                         int pkt_size;
 
 process_pkt:
+                        pkt_size = status & 0x00003fff;
                         if (likely(!(dev->features & NETIF_F_RXFCS)))
-                                pkt_size = (status & 0x00003fff) - 4;
-                        else
-                                pkt_size = status & 0x00003fff;
+                                pkt_size -= ETH_FCS_LEN;
 
                         /*
                          * The driver does not support incoming fragmented
                          * frames. They are seen as a symptom of over-mtu
                          * sized frames.
                          */
-                        if (unlikely(rtl8101_fragmented_frame(status))) {
+                        if (unlikely(rtl8101_fragmented_frame(status)) ||
+                            unlikely(pkt_size > tp->rx_buf_sz)) {
                                 RTLDEV->stats.rx_dropped++;
                                 RTLDEV->stats.rx_length_errors++;
                                 rtl8101_mark_to_asic(desc, tp->rx_buf_sz);
@@ -13803,7 +13956,7 @@ static irqreturn_t rtl8101_interrupt(int irq, void *dev_instance)
         do {
                 status = RTL_R16(tp, IntrStatus);
 
-                if(!(tp->features & RTL_FEATURE_MSI)) {
+                if(!(tp->features & (RTL_FEATURE_MSI | RTL_FEATURE_MSIX))) {
                         /* hotplug/major error/no more work/shared irq */
                         if ((status == 0xFFFF) || !status)
                                 break;
@@ -13928,7 +14081,7 @@ rtl8101_down(struct net_device *dev)
 
         spin_unlock_irqrestore(&tp->lock, flags);
 
-        synchronize_irq(dev->irq);
+        synchronize_irq(tp->irq);
 
         spin_lock_irqsave(&tp->lock, flags);
 
@@ -13970,17 +14123,17 @@ static int rtl8101_close(struct net_device *dev)
 
                 spin_unlock_irqrestore(&tp->lock, flags);
 
-                free_irq(dev->irq, dev);
+                free_irq(tp->irq, dev);
 
-                pci_free_consistent(pdev,
-                                    (tp->num_rx_desc * sizeof(struct RxDesc)),
-                                    tp->RxDescArray,
-                                    tp->RxPhyAddr);
+                dma_free_coherent(&pdev->dev,
+                                  tp->RxDescAllocSize,
+                                  tp->RxDescArray,
+                                  tp->RxPhyAddr);
 
-                pci_free_consistent(pdev,
-                                    (tp->num_tx_desc * sizeof(struct TxDesc)),
-                                    tp->TxDescArray,
-                                    tp->TxPhyAddr);
+                dma_free_coherent(&pdev->dev,
+                                  tp->TxDescAllocSize,
+                                  tp->TxDescArray,
+                                  tp->TxPhyAddr);
 
                 tp->TxDescArray = NULL;
                 tp->RxDescArray = NULL;

@@ -184,8 +184,8 @@ do { \
 #define NETIF_F_RXFCS  0
 #endif
 
-#ifndef HAVE_FREE_NETDEV
-#define free_netdev(x)	kfree(x)
+#if !defined(HAVE_FREE_NETDEV) && (LINUX_VERSION_CODE < KERNEL_VERSION(3,1,0))
+#define free_netdev(x)  kfree(x)
 #endif
 
 #ifndef SET_NETDEV_DEV
@@ -321,7 +321,7 @@ do { \
 #define NAPI_SUFFIX		""
 #endif
 
-#define RTL8101_VERSION "1.037.01" NAPI_SUFFIX
+#define RTL8101_VERSION "1.038.02" NAPI_SUFFIX
 #define MODULENAME "r8101"
 #define PFX MODULENAME ": "
 
@@ -400,6 +400,11 @@ This is free software, and you are welcome to redistribute it under certain cond
 #define NUM_RX_DESC 256    /* Number of Rx descriptor registers */
 
 #define RX_BUF_SIZE	0x05EF	/* Rx Buffer size */
+
+//Channel Wait Count
+#define R8101_CHANNEL_WAIT_COUNT (20000)
+#define R8101_CHANNEL_WAIT_TIME (1)  // 1us
+#define R8101_CHANNEL_EXIT_DELAY_TIME (20)  //20us
 
 #define RTL8101_TX_TIMEOUT		(6*HZ)
 #define RTL8101_LINK_TIMEOUT    (1 * HZ)
@@ -1301,7 +1306,8 @@ enum wol_capability {
 
 enum features {
 //	RTL_FEATURE_WOL	= (1 << 0),
-        RTL_FEATURE_MSI	= (1 << 1),
+        RTL_FEATURE_MSI = (1 << 1),
+        RTL_FEATURE_MSIX = (1 << 2),
 };
 
 enum bits {
@@ -1416,6 +1422,8 @@ struct rtl8101_private {
         struct RxDesc *RxDescArray;	/* 256-aligned Rx descriptor ring */
         dma_addr_t TxPhyAddr;
         dma_addr_t RxPhyAddr;
+        u32 TxDescAllocSize;
+        u32 RxDescAllocSize;
         struct sk_buff *Rx_skbuff[MAX_NUM_RX_DESC];	/* Rx data buffers */
         struct ring_info tx_skb[MAX_NUM_TX_DESC];	/* Tx data buffers */
         unsigned rx_buf_sz;
@@ -1426,6 +1434,7 @@ struct rtl8101_private {
         unsigned int pci_cfg_is_read;
         u16 cp_cmd;
         u16 intr_mask;
+        int irq;
         int phy_auto_nego_reg;
         u8 org_mac_addr[NODE_ADDRESS_SIZE];
         struct rtl8101_counters *tally_vaddr;
@@ -1578,8 +1587,8 @@ void rtl8101_mdio_prot_direct_write_phy_ocp(struct rtl8101_private *tp, u32 RegA
 u32 rtl8101_mdio_read(struct rtl8101_private *tp, u32 RegAddr);
 u32 rtl8101_mdio_prot_read(struct rtl8101_private *tp, u32 RegAddr);
 u32 rtl8101_mdio_prot_direct_read_phy_ocp(struct rtl8101_private *tp, u32 RegAddr);
-void rtl8101_ephy_write(struct rtl8101_private *tp, u32 RegAddr, u32 value);
-u16 rtl8101_ephy_read(struct rtl8101_private *tp, u32 RegAddr);
+void rtl8101_ephy_write(struct rtl8101_private *tp, u32 addr, u32 value);
+u16 rtl8101_ephy_read(struct rtl8101_private *tp, u32 addr);
 void rtl8101_mac_ocp_write(struct rtl8101_private *tp, u16 reg_addr, u16 value);
 u16 rtl8101_mac_ocp_read(struct rtl8101_private *tp, u16 reg_addr);
 int rtl8101_eri_write(struct rtl8101_private *tp, int addr, int len, u32 value, int type);
