@@ -7,7 +7,7 @@ include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=r8101
-PKG_VERSION:=1.038.02
+PKG_VERSION:=1.039.00
 PKG_RELEASE:=1
 
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
@@ -28,7 +28,7 @@ define Package/r8101/description
 endef
 
 define Build/Compile
-	$(KERNEL_MAKE) M=$(PKG_BUILD_DIR) modules
+	+$(KERNEL_MAKE) M=$(PKG_BUILD_DIR) modules
 endef
 
 $(eval $(call KernelPackage,r8101))

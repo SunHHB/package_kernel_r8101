@@ -5,7 +5,7 @@
 # r8101 is the Linux device driver released for Realtek Fast Ethernet
 # controllers with PCI-Express interface.
 #
-# Copyright(c) 2022 Realtek Semiconductor Corp. All rights reserved.
+# Copyright(c) 2024 Realtek Semiconductor Corp. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the Free
@@ -69,6 +69,10 @@ This driver is modified from r8169.c in Linux kernel 2.6.18
 #include <linux/mdio.h>
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,10)
+#include <net/gso.h>
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,10) */
+
 #include <asm/io.h>
 #include <asm/irq.h>
 
@@ -81,10 +85,6 @@ This driver is modified from r8169.c in Linux kernel 2.6.18
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #endif
-
-/* Maximum number of multicast addresses to filter (vs. Rx-all-multicast).
-   The RTL chips use a 64 element hash table based on the Ethernet CRC. */
-static const int multicast_filter_limit = 32;
 
 #define _R(NAME,MAC,MASK) \
 	{ .name = NAME, .mcfg = MAC, .RxConfigMask = MASK }
@@ -1647,8 +1647,8 @@ static u32 rtl8101_mdio_real_read_phy_ocp(struct rtl8101_private *tp,
         return mdio_real_direct_read_phy_ocp(tp, ocp_addr);
 }
 
-u32 mdio_real_read(struct rtl8101_private *tp,
-                   u32 RegAddr)
+static u32 mdio_real_read(struct rtl8101_private *tp,
+                          u32 RegAddr)
 {
         int i, value = 0;
 
@@ -2371,7 +2371,7 @@ rtl8101_hw_clear_timer_int(struct net_device *dev)
         }
 }
 
-static int rtl8101_enable_EEE(struct rtl8101_private *tp)
+static int rtl8101_enable_eee(struct rtl8101_private *tp)
 {
         int ret;
         u16 data;
@@ -2542,7 +2542,7 @@ static int rtl8101_enable_EEE(struct rtl8101_private *tp)
         return ret;
 }
 
-static int rtl8101_disable_EEE(struct rtl8101_private *tp)
+static int rtl8101_disable_eee(struct rtl8101_private *tp)
 {
         int ret;
         u16 data;
@@ -2859,7 +2859,7 @@ rtl8101_check_link_status(struct net_device *dev)
                         if (tp->mcfg == CFG_METHOD_11 || tp->mcfg == CFG_METHOD_12 ||
                             tp->mcfg == CFG_METHOD_13) {
                                 if ((RTL_R8(tp, PHYstatus) & FullDup) == 0 && tp->eee_enabled == 1)
-                                        rtl8101_disable_EEE(tp);
+                                        rtl8101_disable_eee(tp);
 
                                 if (RTL_R8(tp, PHYstatus) & _10bps) {
                                         rtl8101_eri_write(tp, 0x1D0, 2, 0x4D02, ERIAR_ExGMAC);
@@ -2918,9 +2918,10 @@ rtl8101_check_link_status(struct net_device *dev)
                 } else {
                         if (tp->mcfg == CFG_METHOD_11 || tp->mcfg == CFG_METHOD_12 ||
                             tp->mcfg == CFG_METHOD_13) {
-                                rtl8101_mdio_write( tp, 0x1F, 0x0004);
+                                rtl8101_mdio_write(tp, 0x1F, 0x0004);
                                 data32 = rtl8101_mdio_read( tp, 0x10);
                                 data32 &= ~0x0C00;
+                                rtl8101_mdio_write(tp, 0x10, data32);
                                 rtl8101_mdio_write(tp, 0x1F, 0x0000);
                         }
                         if (netif_msg_ifdown(tp))
@@ -3351,7 +3352,7 @@ rtl8101_hw_d3_para(struct net_device *dev)
 
         if ((tp->mcfg == CFG_METHOD_11 || tp->mcfg == CFG_METHOD_12 ||
              tp->mcfg == CFG_METHOD_13) && (tp->eee_enabled == 1))
-                rtl8101_disable_EEE(tp);
+                rtl8101_disable_eee(tp);
 
         rtl8101_set_pci_99_180_exit_driver_para(dev);
 
@@ -3821,7 +3822,7 @@ rtl8101_get_drvinfo(struct net_device *dev,
 
         strcpy(info->driver, MODULENAME);
         strcpy(info->version, RTL8101_VERSION);
-        strcpy(info->bus_info, pci_name(tp->pci_dev));
+        strncpy(info->bus_info, pci_name(tp->pci_dev), sizeof(info->bus_info) - 1);
         info->regdump_len = R8101_REGS_DUMP_SIZE;
 }
 
@@ -4703,7 +4704,102 @@ static int rtl_nway_reset(struct net_device *dev)
         return ret;
 }
 
+static bool
+rtl8101_support_eee(struct rtl8101_private *tp)
+{
+        switch (tp->mcfg) {
+        case CFG_METHOD_17 ... CFG_METHOD_20:
+                return true;
+        default:
+                return false;
+        }
+}
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,9,0)
+static int
+rtl_ethtool_get_eee(struct net_device *net, struct ethtool_keee *edata)
+{
+        __ETHTOOL_DECLARE_LINK_MODE_MASK(common);
+        struct rtl8101_private *tp = netdev_priv(net);
+        unsigned long flags;
+        u16 val;
+
+        if (!rtl8101_support_eee(tp))
+                return -EOPNOTSUPP;
+
+        spin_lock_irqsave(&tp->lock, flags);
+
+        if (unlikely(tp->rtk_enable_diag)) {
+                spin_unlock_irqrestore(&tp->lock, flags);
+                return -EBUSY;
+        }
+
+        rtl8101_mdio_write(tp, 0x1F, 0x0A5C);
+        val = rtl8101_mdio_read(tp, 0x12);
+        val &= BIT_1;
+        mii_eee_cap1_mod_linkmode_t(edata->supported, val);
+
+        rtl8101_mdio_write(tp, 0x1F, 0x0A5D);
+        val = rtl8101_mdio_read(tp, 0x10);
+        mii_eee_cap1_mod_linkmode_t(edata->advertised, val);
+
+        val = rtl8101_mdio_read(tp, 0x11);
+        mii_eee_cap1_mod_linkmode_t(edata->lp_advertised, val);
+
+        val = rtl8101_eri_read(tp, 0x1B0, 2, ERIAR_ExGMAC);
+        val &= BIT_1 | BIT_0;
+
+        rtl8101_mdio_write(tp, 0x1F, 0x0000);
+
+        spin_unlock_irqrestore(&tp->lock, flags);
+
+        edata->eee_enabled = !!val;
+        linkmode_and(common, edata->advertised, edata->lp_advertised);
+        edata->eee_active = !linkmode_empty(common);
+
+        return 0;
+}
+
+static int
+rtl_ethtool_set_eee(struct net_device *net, struct ethtool_keee *eee)
+{
+        struct rtl8101_private *tp = netdev_priv(net);
+        unsigned long flags;
+
+        if (!rtl8101_support_eee(tp))
+                return -EOPNOTSUPP;
+
+        if (!HW_HAS_WRITE_PHY_MCU_RAM_CODE(tp))
+                return -EOPNOTSUPP;
+
+        spin_lock_irqsave(&tp->lock, flags);
+
+        if (unlikely(tp->rtk_enable_diag)) {
+                spin_unlock_irqrestore(&tp->lock, flags);
+                return -EBUSY;
+        }
+
+        if (tp->autoneg != AUTONEG_ENABLE) {
+                spin_unlock_irqrestore(&tp->lock, flags);
+                return -EINVAL;
+        }
+
+        tp->eee_enabled = eee->eee_enabled;
+        tp->eee_adv_t = linkmode_to_mii_eee_cap1_t(eee->advertised);
+
+        if (eee->eee_enabled)
+                rtl8101_enable_eee(tp);
+        else
+                rtl8101_disable_eee(tp);
+
+        spin_unlock_irqrestore(&tp->lock, flags);
+
+        rtl_nway_reset(net);
+
+        return 0;
+}
+#else
 static int
 rtl_ethtool_get_eee(struct net_device *net, struct ethtool_eee *eee)
 {
@@ -4783,13 +4879,18 @@ rtl_ethtool_set_eee(struct net_device *net, struct ethtool_eee *eee)
                 return -EBUSY;
         }
 
+        if (tp->autoneg != AUTONEG_ENABLE) {
+                spin_unlock_irqrestore(&tp->lock, flags);
+                return -EINVAL;
+        }
+
         tp->eee_enabled = eee->eee_enabled;
         tp->eee_adv_t = ethtool_adv_to_mmd_eee_adv_t(eee->advertised);
 
         if (tp->eee_enabled)
-                rtl8101_enable_EEE(tp);
+                rtl8101_enable_eee(tp);
         else
-                rtl8101_disable_EEE(tp);
+                rtl8101_disable_eee(tp);
 
         spin_unlock_irqrestore(&tp->lock, flags);
 
@@ -4797,7 +4898,19 @@ rtl_ethtool_set_eee(struct net_device *net, struct ethtool_eee *eee)
 
         return 0;
 }
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(6,9,0) */
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0)
+static void rtl8101_get_channels(struct net_device *dev,
+                                 struct ethtool_channels *channel)
+{
+        channel->max_rx = 1;
+        channel->max_tx = 1;
+        channel->rx_count = 1;
+        channel->tx_count = 1;
+}
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0) */
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,4,22)
 static const struct ethtool_ops rtl8101_ethtool_ops = {
@@ -4852,6 +4965,9 @@ static const struct ethtool_ops rtl8101_ethtool_ops = {
         .get_eee = rtl_ethtool_get_eee,
         .set_eee = rtl_ethtool_set_eee,
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0) */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0)
+        .get_channels		= rtl8101_get_channels,
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3,0,0) */
         .nway_reset = rtl_nway_reset,
 };
 #endif //LINUX_VERSION_CODE > KERNEL_VERSION(2,4,22)
@@ -5039,15 +5155,17 @@ rtl8101_tally_counter_clear(struct rtl8101_private *tp)
         RTL_W32(tp, CounterAddrLow, ((u64)tp->tally_paddr & (DMA_BIT_MASK(32))) | CounterReset);
 }
 
-void
+/*
+static void
 rtl8101_enable_now_is_oob(struct rtl8101_private *tp)
 {
         if( tp->HwSuppNowIsOobVer == 1 ) {
                 RTL_W8(tp, MCUCmd_reg, RTL_R8(tp, MCUCmd_reg) | Now_is_oob);
         }
 }
+*/
 
-void
+static void
 rtl8101_disable_now_is_oob(struct rtl8101_private *tp)
 {
         if( tp->HwSuppNowIsOobVer == 1 ) {
@@ -5770,19 +5888,6 @@ rtl8101_hw_init(struct net_device *dev)
                 rtl8101_mac_ocp_write(tp, 0xE63E, rtl8101_mac_ocp_read( tp, 0xE63E) & ~(BIT_0));
                 rtl8101_mac_ocp_write(tp, 0xC094, 0x0);
                 rtl8101_mac_ocp_write(tp, 0xC09E, 0x0);
-                break;
-        }
-
-        switch (tp->mcfg) {
-        case CFG_METHOD_18:
-        case CFG_METHOD_19:
-        case CFG_METHOD_20:
-                if (aspm) {
-                        if ((rtl8101_mac_ocp_read(tp, 0xDC00) & BIT_3) || (RTL_R8(tp, Config0) & 0x07)) {
-                                RTL_W8(tp, 0x6E, RTL_R8(tp, 0x6E) | BIT_6);
-                                rtl8101_eri_write(tp, 0x1AE, 2, 0x0403, ERIAR_ExGMAC);
-                        }
-                }
                 break;
         }
 
@@ -10050,9 +10155,9 @@ rtl8101_hw_phy_config(struct net_device *dev)
 
         if (HW_HAS_WRITE_PHY_MCU_RAM_CODE(tp)) {
                 if (tp->eee_enabled == 1)
-                        rtl8101_enable_EEE(tp);
+                        rtl8101_enable_eee(tp);
                 else
-                        rtl8101_disable_EEE(tp);
+                        rtl8101_disable_eee(tp);
         }
 }
 
@@ -10380,8 +10485,11 @@ rtl8101_init_software_variable(struct net_device *dev)
         dev->min_mtu = ETH_MIN_MTU;
         dev->max_mtu = ETH_DATA_LEN;
 #endif //LINUX_VERSION_CODE >= KERNEL_VERSION(4,10,0)
-        tp->eee_enabled = eee_enable;
-        tp->eee_adv_t = MDIO_EEE_100TX;
+
+        if (rtl8101_support_eee(tp)) {
+                tp->eee_enabled = eee_enable;
+                tp->eee_adv_t = MDIO_EEE_100TX;
+        }
 }
 
 static void
@@ -10455,7 +10563,7 @@ rtl8101_get_mac_address(struct net_device *dev)
         /* keep the original MAC address */
         memcpy(tp->org_mac_addr, dev->dev_addr, MAC_ADDR_LEN);
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,13)
-        memcpy(dev->perm_addr, dev->dev_addr, dev->addr_len);
+        memcpy(dev->perm_addr, dev->dev_addr, MAC_ADDR_LEN);
 #endif
         return 0;
 }
@@ -11681,10 +11789,35 @@ rtl8101_link_timer(struct timer_list *t)
         mod_timer(timer, jiffies + RTL8101_LINK_TIMEOUT);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0)
+static int pci_enable_msix_range(struct pci_dev *dev, struct msix_entry *entries,
+                                 int minvec, int maxvec)
+{
+        int nvec = maxvec;
+        int rc;
+
+        if (maxvec < minvec)
+                return -ERANGE;
+
+        do {
+                rc = pci_enable_msix(dev, entries, nvec);
+                if (rc < 0) {
+                        return rc;
+                } else if (rc > 0) {
+                        if (rc < minvec)
+                                return -ENOSPC;
+                        nvec = rc;
+                }
+        } while (rc);
+
+        return nvec;
+}
+#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0) */
+
 static int rtl8101_enable_msix(struct rtl8101_private *tp)
 {
         int nvecs = 0;
-        struct msix_entry msix_ent[1] = {0};
+        struct msix_entry msix_ent[1] = {{0}};
 
         nvecs = pci_enable_msix_range(tp->pci_dev, msix_ent,
                                       1, 1);
@@ -12212,9 +12345,8 @@ rtl8101_hw_set_rx_packet_filter(struct net_device *dev)
                         AcceptBroadcast | AcceptMulticast | AcceptMyPhys |
                         AcceptAllPhys;
                 mc_filter[1] = mc_filter[0] = 0xffffffff;
-        } else if ((netdev_mc_count(dev) > multicast_filter_limit)
-                   || (dev->flags & IFF_ALLMULTI)) {
-                /* Too many to filter perfectly -- accept all multicasts. */
+        } else if (dev->flags & IFF_ALLMULTI) {
+                /* accept all multicasts. */
                 rx_mode = AcceptBroadcast | AcceptMulticast | AcceptMyPhys;
                 mc_filter[1] = mc_filter[0] = 0xffffffff;
         } else {
@@ -12786,10 +12918,7 @@ rtl8101_hw_config(struct net_device *dev)
 #endif
 
         switch (tp->mcfg) {
-        case CFG_METHOD_17:
-        case CFG_METHOD_18:
-        case CFG_METHOD_19:
-        case CFG_METHOD_20: {
+        case CFG_METHOD_17: {
                 int timeout;
                 for (timeout = 0; timeout < 10; timeout++) {
                         if ((rtl8101_eri_read(tp, 0x1AE, 2, ERIAR_ExGMAC) & BIT_13)==0)
@@ -13873,7 +14002,7 @@ process_pkt:
                                 RTLDEV->stats.rx_dropped++;
                                 RTLDEV->stats.rx_length_errors++;
                                 rtl8101_mark_to_asic(desc, tp->rx_buf_sz);
-                                continue;
+                                goto release_descriptor;
                         }
 
                         skb = tp->Rx_skbuff[entry];
@@ -13910,6 +14039,8 @@ process_pkt:
                         RTLDEV->stats.rx_bytes += pkt_size;
                         RTLDEV->stats.rx_packets++;
                 }
+
+release_descriptor:
                 cur_rx++;
                 entry = cur_rx % tp->num_rx_desc;
                 desc = tp->RxDescArray + entry;
